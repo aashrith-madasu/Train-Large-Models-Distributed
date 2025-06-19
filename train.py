@@ -1,21 +1,23 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from datasets import load_dataset
 from peft import get_peft_model, LoraConfig, prepare_model_for_kbit_training
 from accelerate import Accelerator
+import torch
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
-import torch
 from tqdm import tqdm
+import wandb
 
-from dataset import get_dataloader
+
+from .dataset import get_dataloader
 
 
 # Initialize accelerator
 accelerator = Accelerator()
-
 print("Hello from device ", accelerator.device)
 
 # Load tokenizer and dataset
@@ -84,6 +86,14 @@ for epoch in range(num_epochs):
         optimizer.zero_grad()
 
         total_loss += loss.item()
+        
+        # Save model
+        unwrapped_model = accelerator.unwrap_model(model)
+        unwrapped_model.save_pretrained(
+            "checkpoints",
+            is_main_process=accelerator.is_main_process,
+            save_function=accelerator.save,
+        )
 
     avg_loss = total_loss / len(train_loader)
     accelerator.print(f"Epoch {epoch+1} | Loss: {avg_loss:.4f}")
