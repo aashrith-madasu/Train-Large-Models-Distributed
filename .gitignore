@@ -4,3 +4,4 @@
 .triton_cache
 __pycache__
 .poetry_cache
+checkpoints

@@ -1,10 +1,9 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from datasets import load_dataset
-from peft import get_peft_model, LoraConfig, prepare_model_for_kbit_training
+from peft import get_peft_model, LoraConfig, prepare_model_for_kbit_training, PeftModelForCausalLM
 from accelerate import Accelerator
 import torch
 from torch.utils.data import DataLoader
@@ -12,8 +11,8 @@ from torch.optim import AdamW
 from tqdm import tqdm
 import wandb
 
-
-from .dataset import get_dataloader
+from dataset import get_dataloader
+from utils import save_fsdp_peft_model
 
 
 # Initialize accelerator
@@ -37,13 +36,13 @@ print(f"Loaded {len(train_loader)} batches")
 #     bnb_4bit_use_double_quant=True,
 #     bnb_4bit_quant_type="nf4",  # or "fp4"
 # )
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.bfloat16,
-    bnb_4bit_use_double_quant=True,
-    # bnb_4bit_quant_storage=torch.bfloat16,
-)
+# bnb_config = BitsAndBytesConfig(
+#     load_in_4bit=True,
+#     bnb_4bit_quant_type="nf4",
+#     bnb_4bit_compute_dtype=torch.bfloat16,
+#     bnb_4bit_use_double_quant=True,
+#     # bnb_4bit_quant_storage=torch.bfloat16,
+# )
 peft_config = LoraConfig(
     r=8,
     lora_alpha=16,
@@ -55,12 +54,12 @@ peft_config = LoraConfig(
 
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
-    quantization_config=bnb_config,
+    # quantization_config=bnb_config,
     device_map=None,
     torch_dtype=torch.bfloat16,
     # attn_implementation="flash_attention_2"
 )
-model = prepare_model_for_kbit_training(model)
+# model = prepare_model_for_kbit_training(model)
 model = get_peft_model(model, peft_config)
 
 
@@ -71,29 +70,23 @@ optimizer = AdamW(model.parameters(), lr=2e-4)
 model, optimizer, train_loader = accelerator.prepare(model, optimizer, train_loader)
 
 # Training Loop
-model.train()
-num_epochs = 1
+EPOCHS = 1
 
-for epoch in range(num_epochs):
+for epoch in range(EPOCHS):
+    
+    model.train()
     total_loss = 0
     for step, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}")):
         
         outputs = model(**batch)
         loss = outputs.loss
-
         accelerator.backward(loss)
         optimizer.step()
         optimizer.zero_grad()
-
         total_loss += loss.item()
         
-        # Save model
-        unwrapped_model = accelerator.unwrap_model(model)
-        unwrapped_model.save_pretrained(
-            "checkpoints",
-            is_main_process=accelerator.is_main_process,
-            save_function=accelerator.save,
-        )
+    # >>> SAVE model >>>
+    save_fsdp_peft_model(model)
 
     avg_loss = total_loss / len(train_loader)
     accelerator.print(f"Epoch {epoch+1} | Loss: {avg_loss:.4f}")
