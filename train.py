@@ -14,19 +14,41 @@ import wandb
 from dataset import get_dataloader
 from utils import save_fsdp_peft_model
 
+EPOCHS = 1
+LEARNING_RATE = 2e-4
+BATCH_SIZE = 1
+MAX_LENGTH = 8000
+MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+DATASET_NAME = "FractalAIResearch/Fathom-V0.6-Iterative-Curriculum-Learning"
+
+wandb.init(
+    project="qwen-7b",
+    name="run-1",
+    config={
+        "epochs": EPOCHS,
+        "learning_rate": LEARNING_RATE,
+        "batch_size": BATCH_SIZE,
+        "model_name": MODEL_NAME
+    },
+)
 
 # Initialize accelerator
 accelerator = Accelerator()
 print("Hello from device ", accelerator.device)
 
 # Load tokenizer and dataset
-model_name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 tokenizer.chat_template = open("new_chat_template.txt").read()
 
 
-train_loader = get_dataloader(tokenizer=tokenizer, split="train")
-print(f"Loaded {len(train_loader)} batches")
+train_loader = get_dataloader(tokenizer=tokenizer, 
+                              batch_size=BATCH_SIZE,
+                              max_length=MAX_LENGTH,
+                              dataset_name=DATASET_NAME,
+                              split="train")
+num_batches = len(train_loader)
+print(f"Loaded {num_batches} batches")
 
 
 # Load model (4-bit quant + LoRA)
@@ -53,7 +75,7 @@ peft_config = LoraConfig(
 )
 
 model = AutoModelForCausalLM.from_pretrained(
-    model_name,
+    MODEL_NAME,
     # quantization_config=bnb_config,
     device_map=None,
     torch_dtype=torch.bfloat16,
@@ -62,16 +84,16 @@ model = AutoModelForCausalLM.from_pretrained(
 # model = prepare_model_for_kbit_training(model)
 model = get_peft_model(model, peft_config)
 
+wandb.watch(model, log="all", log_freq=num_batches)
 
 # Optimizer
-optimizer = AdamW(model.parameters(), lr=2e-4)
+optimizer = AdamW(model.parameters(), lr=LEARNING_RATE)
 
 # Prepare everything with accelerator
 model, optimizer, train_loader = accelerator.prepare(model, optimizer, train_loader)
 
-# Training Loop
-EPOCHS = 1
 
+# Training Loop
 for epoch in range(EPOCHS):
     
     model.train()
@@ -84,6 +106,8 @@ for epoch in range(EPOCHS):
         optimizer.step()
         optimizer.zero_grad()
         total_loss += loss.item()
+        
+        wandb.log({"train/loss": loss.item()})
         
     # >>> SAVE model >>>
     save_fsdp_peft_model(model)
